@@ -6,11 +6,21 @@ import time
 gi.require_version("Gtk", "3.0")
 gi.require_version('PangoCairo', '1.0')
 gi.require_version('Pango', '1.0')
-from gi.repository import Gtk, GLib, Pango, PangoCairo
+gi.require_version('Gst', '1.0')
+from gi.repository import Gtk, GLib, Pango, PangoCairo, Gst
 import math
 import datetime
 #from gpiozero import PWMLED
 #from gpiozero.pins.rpio import RPIOFactory
+import shutil
+import os
+import fcntl
+from pathlib import Path
+
+
+pf = open('budka.pid','w')
+pf.write(str(os.getpid()))
+fcntl.lockf(pf, fcntl.LOCK_EX)
 
 settings = {}
 
@@ -21,6 +31,71 @@ start = 0
 maxtime = 120
 stop_timer = 0
 timegap = 3
+
+
+
+
+
+
+
+
+Gst.init(None)
+
+audiosrc = "alsasrc device=hw:1"
+videosrc = "v4l2src device=/dev/video0 ! video/x-h264,framerate=30/1,width=1920,height=1080 "
+
+parser = "h264parse"
+decoder = "h264dec"
+
+pipeline = f"""
+{videosrc} ! queue ! {parser} ! mux.
+{audiosrc} ! audioresample ! audioconvert ! opusenc ! queue ! tee name=taudio 
+matroskamux name=mux writing-app="Eri Kiosk" streamable=true ! filesink name=filesink
+taudio. ! queue ! opusparse ! oggmux ! filesink name=audiofilesink
+taudio. ! queue ! opusparse ! mux.
+"""
+
+#"""
+
+#taudio. ! oggmux ! filesink name=audiofilesink
+#taudio. ! mux.
+
+#tvideo. ! {decoder} ! tee name=t2 
+#t2. ! queue ! videoconvert ! gtksink name=preview
+#t2. ! queue ! videoconvert ! videorate ! appsink name=facesink
+#"""
+
+
+
+pipeline = Gst.parse_launch(pipeline)
+filesink = pipeline.get_child_by_name('filesink')
+audiofilesink = pipeline.get_child_by_name('audiofilesink')
+
+
+def checkfree(prefix):
+    while True:
+        total, used, free = shutil.disk_usage(prefix)
+        if free > 1024*1024*1024:
+            break
+        paths = sorted(Path(prefix).iterdir(), key=os.path.getmtime)
+        os.unlink(paths[0])
+
+
+def video_rotate():
+    prefix = settings['video']['prefix']
+    checkfree(prefix)
+    datedname = prefix + datetime.datetime.strftime(datetime.datetime.now(), "%Y-%m-%d-%H-%M-%S")
+    filesink.set_property("location", datedname+'.mkv')
+    audiofilesink.set_property("location", datedname+'.ogg')
+
+def video_start():
+    print('video_start')
+    pipeline.set_state(Gst.State.PLAYING)
+
+def video_stop():
+    print('video_stop')
+    pipeline.set_state(Gst.State.NULL)
+
 
 def round8(x):
     return int(x)>>3<<3
@@ -34,11 +109,12 @@ def on_counter():
         start = 0
 
 def on_start():
-    pass
+    video_rotate()
+    video_start()
 
 
 def on_stop():
-    pass
+    video_stop()
 
 
 
@@ -49,7 +125,7 @@ def on_click(w=None,e=None):
         pass
     elif x < maxtime:
         GLib.source_remove(stop_timer)
-        GLib.idle_add(on_stop)
+        GLib.timeout_add(timegap * 1000, on_stop)
         start = time.time()-maxtime
     elif x < maxtime + timegap:
         pass
@@ -190,14 +266,17 @@ class SYSPWM():
         self.period = period = 10**9/freq
         
         open(f'/sys/class/pwm/pwmchip{chip}/export', 'w').write(f'{out}')
+        time.sleep(1)
         open(f'/sys/class/pwm/pwmchip{chip}/pwm{out}/period', 'w').write(f'{period:.0f}')
         open(f'/sys/class/pwm/pwmchip{chip}/pwm{out}/enable', 'w').write(f'1')
         
         self.set(value)
         
     def set(self, value):
+        if self.value == value:
+            return
+        self.value = value
         duty_cycle = value * self.period
-        print(f'{duty_cycle:.0f}')
         open(f'/sys/class/pwm/pwmchip{self.chip}/pwm{self.out}/duty_cycle', 'w').write(f'{duty_cycle:.0f}')
 
 
@@ -215,8 +294,10 @@ class Button(threading.Thread):
         super().__init__()
         self.pin = pin
         open(f'/sys/class/gpio/export', 'w').write(f'{pin}')
+        time.sleep(1)
         open(f'/sys/class/gpio/gpio{pin}/direction', 'w').write(f'in')
         open(f'/sys/class/gpio/gpio{pin}/edge','w').write(f'rising') # both, falling , rising
+        time.sleep(1)
         self.value = int(open(f'/sys/class/gpio/gpio{self.pin}/value','r').read())
 
 
@@ -274,5 +355,7 @@ win.add(eventbox)
 win.set_default_size(1024,600)
 win.fullscreen()
 win.show_all()
-
-Gtk.main()
+try:
+    Gtk.main()
+finally:
+    fcntl.lockf(pf, fcntl.LOCK_UN)
