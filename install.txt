@@ -1,0 +1,98 @@
+
+apt install -y openssh-server xinit fonts-noto fonts-noto-mono python3-gi \
+  python3-gi-cairo libgtk-3-0 dconf-gsettings-backend python3-toml \
+  python3-pip gstreamer1.0-gtk3 gobject-introspection \
+  gir1.2-gtk-3.0 gir1.2-gstreamer-1.0  gir1.2-pango-1.0  \
+  gstreamer1.0-alsa gstreamer1.0-gtk3 gstreamer1.0-vaapi gstreamer1.0-rtsp \
+  gstreamer1.0-plugins-ugly gstreamer1.0-plugins-rtp gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+
+
+
+dpkg-reconfigure xserver-xorg-legacy
+
+useradd -G gpio,video,audio,uucp,tty,dialout,cdrom,audio,video,plugdev,games,users,input,render,netdev,gpio,i2c,spi  kiosk
+
+#pip3 install RPIO
+
+mkdir /mnt/data/
+chmod 777 /mnt/data/
+
+cat > /etc/systemd/system/x11-autologin.service << EOF
+[Unit]
+Description=X11 session for kiosk
+After=graphical.target systemd-user-sessions.service
+ConditionPathExists=/dev/tty8
+
+[Service]
+User=kiosk
+WorkingDirectory=/opt/budka/
+
+PAMName=login
+Environment=XDG_SESSION_TYPE=x11
+TTYPath=/dev/tty8
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+StandardInput=tty
+UnsetEnvironment=TERM
+
+UtmpIdentifier=tty8
+UtmpMode=user
+
+StandardOutput=journal
+ExecStartPre=/usr/bin/chvt 8
+ExecStart=/usr/bin/startx /usr/bin/python3 /opt/budka/ui.py  -- -keeptty -novtswitch -sharevts  vt8
+
+PIDFile=/opt/budka/budka.pid
+KillSignal=9
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+
+EOF
+
+#systemctl enable getty@tty8
+
+mkdir -p /etc/systemd/system/getty@tty8.service.d/
+
+cat > /etc/systemd/system/getty@tty8.service.d/autologin.conf << EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin kiosk --noclear %I $TERM
+TTYVTDisallocate=no
+
+EOF
+
+
+cat > /etc/X11/xorg.conf.d/10-blanking.conf << EOF 
+
+Section "Extensions"
+    Option      "DPMS" "Disable"
+EndSection
+
+Section "ServerLayout"
+    Identifier "ServerLayout0"
+    Option "StandbyTime" "0"
+    Option "SuspendTime" "0"
+    Option "OffTime"     "0"
+    Option "BlankTime"   "0"
+EndSection
+
+EOF
+
+
+mkdir /opt/budka
+chown kiosk /opt/budka
+
+systemctl enable x11-autologin.service
+systemctl set-default graphical.target
+
+echo /dev/sda1       /mnt/data/      auto    user,umask=000,utf8,noauto,x-systemd.automount  0       2 >> /etc/fstab
+
+
+dtoverlay=pwm
