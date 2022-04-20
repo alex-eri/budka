@@ -258,29 +258,27 @@ def on_draw(w,c,data=None):
 #sofit = PWMLED(pin=18, frequency=1000, pin_factory=RPIOFactory())
 
 class SYSPWM():
-    def __init__(self, chip=0, out=0, freq=200, value=0):
+    def __init__(self, chip=0, out=0, freq=400, value=0):
         self.chip = chip
         self.out = out
         self.freq = freq
         self.value = value
         self.period = period = 10**9/freq
-        
         open(f'/sys/class/pwm/pwmchip{chip}/export', 'w').write(f'{out}')
         time.sleep(1)
         open(f'/sys/class/pwm/pwmchip{chip}/pwm{out}/period', 'w').write(f'{period:.0f}')
         open(f'/sys/class/pwm/pwmchip{chip}/pwm{out}/enable', 'w').write(f'1')
-        
         self.set(value)
-        
+
     def set(self, value):
+        print('sofit', repr(value))
         if self.value == value:
             return
         self.value = value
         duty_cycle = value * self.period
+        print(f'{duty_cycle:.0f}')
         open(f'/sys/class/pwm/pwmchip{self.chip}/pwm{self.out}/duty_cycle', 'w').write(f'{duty_cycle:.0f}')
 
-
-sofit = SYSPWM()
 
 
 import threading
@@ -327,9 +325,7 @@ class Button(threading.Thread):
                     print(data, self.value, time.time())
 
 
-start_button = Button(4)
 
-start_button.start()
 
 
 def load_settings():
@@ -338,12 +334,17 @@ def load_settings():
     settings = toml.load('settings.ini')
     maxtime = settings['timer']['max']
     timegap = settings['timer']['gap']
-    sofit.set(settings['sofit']['wait'])
-    
 
 
 
 load_settings()
+
+sofit = SYSPWM()
+sofit.set(settings['sofit']['wait'])
+
+
+start_button = Button(4)
+start_button.start()
 
 da = Gtk.DrawingArea()
 da.connect('draw', on_draw)
@@ -359,3 +360,5 @@ try:
     Gtk.main()
 finally:
     fcntl.lockf(pf, fcntl.LOCK_UN)
+
+sofit.set(0)
